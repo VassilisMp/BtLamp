@@ -2,21 +2,21 @@
 // #include <SoftwareSerial.h>
 #include <math.h>
 #include <stdlib.h>
-#include <time.h>
+// #include <time.h>
 #include <Thread.h>
 #include <ThreadController.h>
 
-#define PUMP_PIN 3
+#define PUMP_PIN 9
 #define RED_PIN 5
-#define GREEN_PIN 6
-#define BLUE_PIN 9
+#define GREEN_PIN 3
+#define BLUE_PIN 6
 #define RX_PIN 0
 #define TX_PIN 1
 #define END_CHAR '\n'
 
 
-#define round(x)     (uint8_t)((x)+0.5)
-#define random_byte() (uint8_t)(rand() % 256)
+#define round(x)     (byte)((x)+0.5)
+#define random_byte() (byte)(random(256))
 
 // Bluetooth codes
 #define CHANGE_COLOR 'c'
@@ -31,30 +31,31 @@
 
 // variables
 // SoftwareSerial MyBlue(RX_PIN, TX_PIN); // RX | TX 
-uint8_t pump_level;
-uint8_t red_level;
-uint8_t green_level;
-uint8_t blue_level;
-uint8_t alpha_level;
+byte pump_level = 0;
+byte red_level = 0;
+byte green_level = 0;
+byte blue_level = 0;
+byte alpha_level = 0;
 float alpha_coef = 0.0;
 unsigned long power_interval_ms = 0;
 const unsigned long MAX_INTERVAL = 5000;
-bool random_color_mode = false;
-bool color_seq_mode = false;
-bool light_state = true;
-bool pump_state = true;
+boolean random_color_mode = false;
+boolean color_seq_mode = false;
+boolean light_state = false;
+boolean pump_state = false;
 // read buffer
-uint8_t buffer[100];
-uint8_t index = 0;
-uint8_t end_index = 0;
+byte buffer[100];
+byte index = 0;
+byte end_index = 0;
 
 // functions
-void changeColor(uint8_t[]);
-void changeColor(uint8_t, uint8_t, uint8_t, uint8_t);
-void changePowerInterval(uint8_t[]);
+void changeColor(byte[]);
+void changeColor(byte, byte, byte, byte);
+void changePowerInterval(byte[]);
+void changePowerInterval(unsigned long);
 void enableRandomColor();
 void disableRandomColor();
-void submitColorSequence(uint8_t[]);
+void submitColorSequence(byte[]);
 void lightOn();
 void lightOff();
 void pumpOn();
@@ -121,9 +122,6 @@ void btRead()
 // callback for showThread
 void show()
 {
-  // TODO create new methods
-  showThreadHelper.interval = 10;
-  showThreadHelper.runned(millis());
   if (random_color_mode)
   {
     changeColor(random_byte(), random_byte(), random_byte(), NULL);
@@ -131,15 +129,17 @@ void show()
   {
     /* code */
   }
+  showThreadHelper.reset(10);
 }
 
 void light_off()
 {
+  Serial.println("showThreadHelper: light_off");
   digitalWrite(RED_PIN, LOW);
   digitalWrite(GREEN_PIN, LOW);
   digitalWrite(BLUE_PIN, LOW);
   digitalWrite(PUMP_PIN, LOW);
-  controll.remove(&showThreadHelper);
+  // controll.remove(&showThreadHelper);
 }
 
 void setup() {
@@ -156,14 +156,29 @@ void setup() {
   // showThread conf
   showThread.onRun(show);
   showThread.setInterval(0);
+  showThread.enabled = false;
   // helperThread conf
   showThreadHelper.onRun(light_off);
-  showThread.setInterval(10);
+  showThreadHelper.setInterval(10);
+  showThreadHelper.enabled = false;
   // conf controller
   controll.add(&ioThread);
-  controll.add(&showThread);
+  // controll.add(&showThread);
   // initialize random generator
-  srand((unsigned) time(0));
+  // if analog input pin 0 is unconnected, random analog
+  // noise will cause the call to randomSeed() to generate
+  // different seed numbers each time the sketch runs.
+  // randomSeed() will then shuffle the random function.
+  randomSeed(analogRead(0));
+  init();
+}
+
+void init() 
+{
+  enableRandomColor();
+  lightOn();
+  // pumpOff();
+  changePowerInterval((unsigned long) 1000);
 }
 
 void loop() {
@@ -173,7 +188,7 @@ void loop() {
 	controll.run();
 }
 
-void changeColor(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha)
+void changeColor(byte red, byte green, byte blue, byte alpha)
 {
   red_level = red;
   green_level = green;
@@ -182,10 +197,10 @@ void changeColor(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha)
   {
     alpha_level = alpha;
     // alpha coefficient
-    alpha_coef = alpha_level/254.0;
+    alpha_coef = alpha_level/255.0;
   }
   // turn off random color
-  disableRandomColor();
+  // disableRandomColor();
   analogWrite(RED_PIN, round(red_level*alpha_coef));
   analogWrite(GREEN_PIN, round(green_level*alpha_coef));
   analogWrite(BLUE_PIN, round(blue_level*alpha_coef));
@@ -195,17 +210,21 @@ void changeColor(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha)
   }
 }
 
-void changeColor(uint8_t message[]) {
+void changeColor(byte message[]) {
   changeColor(message[0], message[1], message[2], message[3]);
 }
 
-void changePowerInterval(uint8_t message[]) 
+void changePowerInterval(byte message[]) 
 {
-  power_interval_ms = message[0];
+}
+
+void changePowerInterval(unsigned long interval) 
+{
+  power_interval_ms = interval;
   if (power_interval_ms > 0 && !showThread.enabled)
   {
     controll.add(&showThread);
-    controll.add(&showThreadHelper);
+    // controll.add(&showThreadHelper);
   } else if (power_interval_ms == 0 && showThread.enabled)
   {
     controll.remove(&showThread);
@@ -224,7 +243,7 @@ void disableRandomColor()
   random_color_mode = false;
 }
 
-void submitColorSequence(char message[])
+void submitColorSequence(byte message[])
 {
 
 }
@@ -238,6 +257,13 @@ void lightOn()
     {
       controll.add(&showThread);
     }
+  }
+  analogWrite(RED_PIN, round(red_level*alpha_coef));
+  analogWrite(GREEN_PIN, round(green_level*alpha_coef));
+  analogWrite(BLUE_PIN, round(blue_level*alpha_coef));
+  if (pump_state)
+  {
+    analogWrite(PUMP_PIN, round(255*alpha_coef));
   }
 }
 

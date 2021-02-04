@@ -86,6 +86,11 @@ public:
 
 	// Runs Thread
 	virtual void run();
+
+	virtual void reset(unsigned long interval) {
+		this->interval = interval;
+  		runned(millis());
+	}
 };
 
 #endif
