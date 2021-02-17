@@ -1,6 +1,5 @@
 #include <Arduino.h>
 // #include <SoftwareSerial.h>
-#include <math.h>
 #include <stdlib.h>
 #include "protothreads.h"
 // #include <vector>
@@ -8,12 +7,14 @@
 // #include <Thread.h>
 // #include <ThreadController.h>
 
+#define random_byte() (byte)(random(256))
+
 #define LOGGING
 inline void log(const char[]) __attribute__((always_inline));
 
 void log(const char c[]) {
 #ifdef LOGGING
-  Serial.println(c);
+    Serial.println(c);
 #endif
 }
 
@@ -25,18 +26,18 @@ void log(const char c[]) {
 #define TX_PIN 1
 #define END_CHAR '\n'
 
-#define random_byte() (byte)(random(256))
-
 // Bluetooth codes
 #define CHANGE_COLOR 'c'
 #define CHANGE_POWER_INTERVAL 'i'
 #define ENABLE_RANDOM_COLOR 'R'
 #define DISABLE_RANDOM_COLOR 'r'
 #define SUBMIT_COLOR_SEQUENCE 's'
-#define LIGHT_ON 'L'
-#define LIGHT_OFF 'l'
-#define PUMP_ON 'P'
-#define PUMP_OFF 'p'
+#define ENABLE_LIGHT 'L'
+#define DISABLE_LIGHT 'l'
+#define ENABLE_PUMP 'P'
+#define DISABLE_PUMP 'p'
+#define ENABLE_DIMMING 'D'
+#define DISABLE_DIMMING 'd'
 
 #define PTS_SIZE 2
 #define MAX_INTERVAL 1500UL
@@ -56,7 +57,7 @@ byte green_level = 255;
 byte blue_level = 255;
 byte alpha_level = 255;
 float alpha_coef = 1.0;
-unsigned long power_interval_ms = 0;
+int power_interval_ms = 0;
 boolean dimming = false;
 boolean random_color_mode = false;
 boolean color_seq_mode = false;
@@ -67,13 +68,10 @@ byte buffer[100];
 byte index = 0;
 byte end_index = 0;
 
-typedef int (*thread_ptr)(void);
+typedef int (*thread_ptr)();
 // thread_ptr threads[PTS_SIZE];
 thread_ptr thread;
 
-// functions declarations
-void turnOn();
-void turnOff();
 // light functions
 /*
 * turns on the light with the last values
@@ -96,8 +94,8 @@ inline void changeColor(byte message[]) __attribute__((always_inline));
 /*
 * changes color and disables random color if enabled, configures pump based on alpha
 */
-inline void changeColor(byte *red, byte *green, byte *blue, byte *alpha) __attribute__((always_inline));
-void changePowerInterval(byte[]);
+inline void changeColor(const byte *red, const byte *green, const byte *blue, const byte *alpha) __attribute__((always_inline));
+void changePowerInterval(const byte[]);
 void submitColorSequence(byte[]);
 void dimLight(float coeff);
 // pump functions
@@ -111,11 +109,15 @@ inline void enablePump() __attribute__((always_inline));
 inline void disablePump() __attribute__((always_inline));
 // dimm pump
 void dimPump(float coeff);
+// enable dimming
+inline void enableDimming() __attribute__((always_inline));
+// disable dimming
+inline void disableDimming() __attribute__((always_inline));
 
 int intervalSwitch();
 int dimmingTriangle();
 
-inline void runThreads() __attribute__((always_inline));
+//inline void runThreads() __attribute__((always_inline));
 
 
 // reads from bluetooth serial
@@ -141,32 +143,38 @@ void btRead() {
                 case DISABLE_RANDOM_COLOR:
                     disableRandomColor();
                     break;
+                case ENABLE_DIMMING:
+                    enableDimming();
+                    break;
+                case DISABLE_DIMMING:
+                    disableDimming();
+                    break;
                 case SUBMIT_COLOR_SEQUENCE:
                     submitColorSequence(buffer + 1);
                     break;
-                case LIGHT_ON:
-                    lightOn();
+                case ENABLE_LIGHT:
+                    enableLight();
                     break;
-                case LIGHT_OFF:
-                    lightOff();
+                case DISABLE_LIGHT:
+                    disableLight();
                     break;
-                case PUMP_ON:
-                    pumpOn();
+                case ENABLE_PUMP:
+                    enablePump();
                     break;
-                case PUMP_OFF:
-                    pumpOff();
+                case DISABLE_PUMP:
+                    disablePump();
                     break;
                 default:
                     break;
             }
             index = 0;
         } else {
-        index++;
+            index++;
         }
     }
 }
 
-void changeColor(byte *red, byte *green, byte *blue, byte *alpha) {
+void changeColor(const byte *red, const byte *green, const byte *blue, const byte *alpha) {
     log("changeColor");
     if (alpha != nullptr) {
         alpha_level = *alpha;
@@ -183,9 +191,13 @@ void changeColor(byte message[]) {
     changeColor(&message[0], &message[1], &message[2], alpha);
 }
 
-void changePowerInterval(byte message[]) {
-    log("changePowerInterval");
-    power_interval_ms = * (unsigned long *) message;
+void changePowerInterval(const byte message[]) {
+    power_interval_ms = * (int *) message;
+#ifdef LOGGING
+    Serial.print("changePowerInterval: ");
+    Serial.print(power_interval_ms);
+    Serial.println(" ms");
+#endif
     // Serial.println(power_interval_ms);
     if (power_interval_ms > 0) {
         if (dimming) thread = &dimmingTriangle;
@@ -196,10 +208,12 @@ void changePowerInterval(byte message[]) {
 }
 
 void enableRandomColor() {
+    log("enableRandomColor");
     random_color_mode = true;
 }
 
 void disableRandomColor() {
+    log("disableRandomColor");
     random_color_mode = false;
 }
 
@@ -208,56 +222,51 @@ void submitColorSequence(byte message[]) {
 }
 
 void lightOn() {
+    log("lightOn");
     analogWrite(RED_PIN, red_level);
     analogWrite(GREEN_PIN, green_level);
     analogWrite(BLUE_PIN, blue_level);
 }
 
 void lightOff() {
+    log("lightOff");
     digitalWrite(RED_PIN, LOW);
     digitalWrite(GREEN_PIN, LOW);
     digitalWrite(BLUE_PIN, LOW);
 }
 
 void enableLight() {
+    log("enableLight");
     light_state = true;
     lightOn();
 }
 
 void disableLight() {
+    log("disableLight");
     light_state = false;
     lightOff();
 }
 
 void pumpOn() {
+    log("pumpOn");
     analogWrite(PUMP_PIN, round(255*alpha_coef));
 }
 
 void pumpOff() {
+    log("pumpOff");
     digitalWrite(PUMP_PIN, LOW);
 }
 
 void enablePump() {
+    log("enablePump");
     pump_state = true;
     pumpOn();
 }
 
 void disablePump() {
+    log("disablePump");
     pump_state = false;
     pumpOff();
-}
-
-// turns everything off
-void turnOff() {
-    digitalWrite(RED_PIN, LOW);
-    digitalWrite(GREEN_PIN, LOW);
-    digitalWrite(BLUE_PIN, LOW);
-    digitalWrite(PUMP_PIN, LOW);
-}
-
-
-void turnOn() {
-
 }
 
 void dimLight(float coeff) {
@@ -266,66 +275,85 @@ void dimLight(float coeff) {
     analogWrite(BLUE_PIN, round(blue_level*coeff));
 }
 
-void dimmPump(float coeff) {
-  analogWrite(PUMP_PIN, round(pump_level*coeff));
+void dimPump(float coeff) {
+    analogWrite(RED_PIN, round(pump_level*coeff));
 }
 
 // threads
 int intervalSwitch() {
     PT_BEGIN(&intervalPt);
-    if (random_color_mode) {
-        byte red = random_byte();
-        byte green = random_byte();
-        byte blue = random_byte();
-        changeColor(&red, &green, &blue, NULL);
-    } else if (color_seq_mode) {
-        /* code */
+    log("intervalSwitch");
+    for(;;) {
+        if (random_color_mode) {
+            byte red = random_byte();
+            byte green = random_byte();
+            byte blue = random_byte();
+            changeColor(&red, &green, &blue, nullptr);
+        } else if (color_seq_mode) {
+            /* code */
+        }
+        if (light_state) lightOn();
+        if (pump_state) pumpOn();
+        PT_SLEEP(&intervalPt, power_interval_ms/2);
+        if (light_state) lightOff();
+        if (pump_state) pumpOff();
+        PT_SLEEP(&intervalPt, power_interval_ms/2);
     }
-    lightOn();
-    if (pump_state) pumpOn();
-    PT_SLEEP(&intervalPt, power_interval_ms/2);
-    lightOff();
-    if (pump_state) pumpOff();
-    PT_SLEEP(&intervalPt, power_interval_ms/2);
     PT_END(&intervalPt);
 }
 
 int dimmingTriangle() {
+    static int half_t = power_interval_ms/2;
+    static auto coeff = static_cast<float>(100.0 / half_t);
+    static float dimm_coeff;
+    static int i;
     PT_BEGIN(&intervalPt);
     log("dimmingTriangle");
     if (random_color_mode) {
-        byte red = random_byte();
-        byte green = random_byte();
-        byte blue = random_byte();
+        auto red = random_byte();
+        auto green = random_byte();
+        auto blue = random_byte();
         changeColor(&red, &green, &blue, nullptr);
     }
     // math
-    static unsigned long half_t = power_interval_ms/2;
-    static float coeff = 100.0/half_t;
-    static float dimm_coeff;
-    static size_t i;
     log("dimming up");
-    for (i = 0; i < power_interval_ms/2; i++) {
+    for (i = 0; i <= power_interval_ms/2; i++) {
         dimm_coeff = i*coeff;
         // Serial.println(dimm_coeff);
-        dimLight(dimm_coeff);
+//        printf("%f\n", dimm_coeff);
+        if (light_state) dimLight(dimm_coeff);
         if (pump_state) dimPump(dimm_coeff);
         PT_SLEEP(&intervalPt, 1);
     }
     log("dimming down");
-    for (i = power_interval_ms/2; i >= 0; i++) {
+    for (i = power_interval_ms/2; i >= 0; i--) {
         dimm_coeff = i*coeff;
-        dimLight(dimm_coeff);
+//        printf("%f\n", dimm_coeff);
+        if (light_state) dimLight(dimm_coeff);
         if (pump_state) dimPump(dimm_coeff);
         PT_SLEEP(&intervalPt, 1);
     }
     PT_END(&intervalPt);
+}
+
+void enableDimming() {
+    log("enableDimming");
+    dimming = true;
+    if (thread == &intervalSwitch)
+        thread = &dimmingTriangle;
+}
+
+void disableDimming() {
+    log("disableDimming");
+    dimming = false;
+    if (thread == &dimmingTriangle)
+        thread = &intervalSwitch;
 }
 
 /*void runThreads() {
     for (int i = 0; i < PTS_SIZE; i++) {
         threads[i]();
-    }  
+    }
 }*/
 
 void setup() {
@@ -337,9 +365,9 @@ void setup() {
     pinMode(GREEN_PIN, OUTPUT);
     pinMode(BLUE_PIN, OUTPUT);
     randomSeed(analogRead(0));
-    // dimming = true;
-    lightOn();
-    unsigned long interv = 200UL;
+//    enableDimming();
+    enableLight();
+    int interv = 200;
     changePowerInterval((byte*)&interv);
 }
 
@@ -348,5 +376,5 @@ void loop() {
     // runThreads();
     if (thread) {
         (*thread)();
-    } 
+    }
 }
