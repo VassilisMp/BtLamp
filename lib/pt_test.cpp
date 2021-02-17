@@ -22,7 +22,6 @@
 
 #include <Arduino.h>
 #include "protothreads.h"
-#include "declarations.h"
 
 pt ptBlink;
 int blinkThread(struct pt* pt) {

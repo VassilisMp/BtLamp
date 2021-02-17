@@ -2,9 +2,20 @@
 // #include <SoftwareSerial.h>
 #include <math.h>
 #include <stdlib.h>
+#include "protothreads.h"
+// #include <vector>
 // #include <time.h>
-#include <Thread.h>
-#include <ThreadController.h>
+// #include <Thread.h>
+// #include <ThreadController.h>
+
+#define LOGGING
+inline void log(const char[]) __attribute__((always_inline));
+
+void log(const char c[]) {
+#ifdef LOGGING
+  Serial.println(c);
+#endif
+}
 
 #define PUMP_PIN 9
 #define RED_PIN 5
@@ -14,8 +25,6 @@
 #define TX_PIN 1
 #define END_CHAR '\n'
 
-
-#define round(x)     (byte)((x)+0.5)
 #define random_byte() (byte)(random(256))
 
 // Bluetooth codes
@@ -29,16 +38,26 @@
 #define PUMP_ON 'P'
 #define PUMP_OFF 'p'
 
-// variables
-// SoftwareSerial MyBlue(RX_PIN, TX_PIN); // RX | TX 
-byte pump_level = 0;
-byte red_level = 0;
-byte green_level = 0;
-byte blue_level = 0;
-byte alpha_level = 0;
-float alpha_coef = 0.0;
+#define PTS_SIZE 2
+#define MAX_INTERVAL 1500UL
+
+// typedef int(*ThreadFPointer)(pt *pt);
+
+// inline static std::vector<pt> pts{2}
+// pt pts[PTS_SIZE];
+// int (*ptsFuns[PTS_SIZE])(pt *pt);
+// ThreadFPointer ptFuns[PTS_SIZE];
+
+pt intervalPt;
+
+byte pump_level = 255;
+byte red_level = 255;
+byte green_level = 255;
+byte blue_level = 255;
+byte alpha_level = 255;
+float alpha_coef = 1.0;
 unsigned long power_interval_ms = 0;
-const unsigned long MAX_INTERVAL = 5000;
+boolean dimming = false;
 boolean random_color_mode = false;
 boolean color_seq_mode = false;
 boolean light_state = false;
@@ -48,245 +67,286 @@ byte buffer[100];
 byte index = 0;
 byte end_index = 0;
 
-// functions
-void changeColor(byte[]);
-void changeColor(byte, byte, byte, byte);
+typedef int (*thread_ptr)(void);
+// thread_ptr threads[PTS_SIZE];
+thread_ptr thread;
+
+// functions declarations
+void turnOn();
+void turnOff();
+// light functions
+/*
+* turns on the light with the last values
+*/
+inline void lightOn() __attribute__((always_inline));
+/*
+* turns off the light
+*/
+inline void lightOff() __attribute__((always_inline));
+// enables light by last state
+inline void enableLight() __attribute__((always_inline));
+// disables light
+inline void disableLight() __attribute__((always_inline));
+// enables random color mode
+inline void enableRandomColor() __attribute__((always_inline));
+// disables random color mode
+inline void disableRandomColor() __attribute__((always_inline));
+// change color
+inline void changeColor(byte message[]) __attribute__((always_inline));
+/*
+* changes color and disables random color if enabled, configures pump based on alpha
+*/
+inline void changeColor(byte *red, byte *green, byte *blue, byte *alpha) __attribute__((always_inline));
 void changePowerInterval(byte[]);
-void changePowerInterval(unsigned long);
-void enableRandomColor();
-void disableRandomColor();
 void submitColorSequence(byte[]);
-void lightOn();
-void lightOff();
-void pumpOn();
-void pumpOff();
+void dimLight(float coeff);
+// pump functions
+// turns on the pump according to the alpha coefficient
+inline void pumpOn() __attribute__((always_inline));
+// turns off the pump
+inline void pumpOff() __attribute__((always_inline));
+// enables the pump by last state
+inline void enablePump() __attribute__((always_inline));
+// disables the pump
+inline void disablePump() __attribute__((always_inline));
+// dimm pump
+void dimPump(float coeff);
+
+int intervalSwitch();
+int dimmingTriangle();
+
+inline void runThreads() __attribute__((always_inline));
 
 
-// ThreadController that will controll all threads
-ThreadController controll = ThreadController();
-
-Thread ioThread = Thread();
-Thread showThread = Thread();
-Thread showThreadHelper = Thread();
-
-// callback for ioThread
-void btRead()
-{
-	// https://www.arduino.cc/reference/en/language/functions/communication/serial/readbytes/
-  // Serial.readBytes(buffer, length)
-  if(Serial.available() > 0) {
-    buffer[index] = Serial.read();
-    // if reached end character, execute cases by message
-    if (buffer[index] == END_CHAR)
-    {
-      /* do stuff with message */
-      switch (buffer[0])
-      {
-      case CHANGE_COLOR:
-        changeColor(buffer + 1);
-        break;
-      case CHANGE_POWER_INTERVAL:
-        changePowerInterval(buffer + 1);
-        break;
-      case ENABLE_RANDOM_COLOR:
-        enableRandomColor();
-        break;
-      case DISABLE_RANDOM_COLOR:
-        disableRandomColor();
-        break;
-      case SUBMIT_COLOR_SEQUENCE:
-        submitColorSequence(buffer + 1);
-        break;
-      case LIGHT_ON:
-        lightOn();
-        break;
-      case LIGHT_OFF:
-        lightOff();
-        break;
-      case PUMP_ON:
-        pumpOn();
-        break;
-      case PUMP_OFF:
-        pumpOff();
-        break;
-      default:
-        break;
-      }
-      index = 0;
-    } else {
-      index++;
+// reads from bluetooth serial
+void btRead() {
+    // https://www.arduino.cc/reference/en/language/functions/communication/serial/readbytes/
+    // Serial.readBytes(buffer, length)
+    if(Serial.available() > 0) {
+        buffer[index] = Serial.read();
+        // if reached end character, execute cases by message
+        if (buffer[index] == END_CHAR) {
+            /* do stuff with message */
+            switch (buffer[0]) {
+                case CHANGE_COLOR:
+                    disableRandomColor();
+                    changeColor(buffer + 1);
+                    break;
+                case CHANGE_POWER_INTERVAL:
+                    changePowerInterval(buffer + 1);
+                    break;
+                case ENABLE_RANDOM_COLOR:
+                    enableRandomColor();
+                    break;
+                case DISABLE_RANDOM_COLOR:
+                    disableRandomColor();
+                    break;
+                case SUBMIT_COLOR_SEQUENCE:
+                    submitColorSequence(buffer + 1);
+                    break;
+                case LIGHT_ON:
+                    lightOn();
+                    break;
+                case LIGHT_OFF:
+                    lightOff();
+                    break;
+                case PUMP_ON:
+                    pumpOn();
+                    break;
+                case PUMP_OFF:
+                    pumpOff();
+                    break;
+                default:
+                    break;
+            }
+            index = 0;
+        } else {
+        index++;
+        }
     }
-  }
 }
 
-// callback for showThread
-void show()
-{
-  if (random_color_mode)
-  {
-    changeColor(random_byte(), random_byte(), random_byte(), NULL);
-  } else if (color_seq_mode)
-  {
-    /* code */
-  }
-  showThreadHelper.reset(10);
-}
-
-void light_off()
-{
-  Serial.println("showThreadHelper: light_off");
-  digitalWrite(RED_PIN, LOW);
-  digitalWrite(GREEN_PIN, LOW);
-  digitalWrite(BLUE_PIN, LOW);
-  digitalWrite(PUMP_PIN, LOW);
-  // controll.remove(&showThreadHelper);
-}
-
-void setup() {
-  Serial.begin(9600);
-  // setup pins
-  pinMode(PUMP_PIN, OUTPUT);
-  pinMode(RED_PIN, OUTPUT);
-  pinMode(GREEN_PIN, OUTPUT);
-  pinMode(BLUE_PIN, OUTPUT);
-  // Configure threads
-  // ioThread conf
-	ioThread.onRun(btRead);
-	ioThread.setInterval(0);
-  // showThread conf
-  showThread.onRun(show);
-  showThread.setInterval(0);
-  showThread.enabled = false;
-  // helperThread conf
-  showThreadHelper.onRun(light_off);
-  showThreadHelper.setInterval(10);
-  showThreadHelper.enabled = false;
-  // conf controller
-  controll.add(&ioThread);
-  // controll.add(&showThread);
-  // initialize random generator
-  // if analog input pin 0 is unconnected, random analog
-  // noise will cause the call to randomSeed() to generate
-  // different seed numbers each time the sketch runs.
-  // randomSeed() will then shuffle the random function.
-  randomSeed(analogRead(0));
-  init();
-}
-
-void init() 
-{
-  enableRandomColor();
-  lightOn();
-  // pumpOff();
-  changePowerInterval((unsigned long) 1000);
-}
-
-void loop() {
-  // run ThreadController
-	// this will check every thread inside ThreadController,
-	// if it should run. If yes, he will run it;
-	controll.run();
-}
-
-void changeColor(byte red, byte green, byte blue, byte alpha)
-{
-  red_level = red;
-  green_level = green;
-  blue_level = blue;
-  if (alpha != NULL)
-  {
-    alpha_level = alpha;
-    // alpha coefficient
-    alpha_coef = alpha_level/255.0;
-  }
-  // turn off random color
-  // disableRandomColor();
-  analogWrite(RED_PIN, round(red_level*alpha_coef));
-  analogWrite(GREEN_PIN, round(green_level*alpha_coef));
-  analogWrite(BLUE_PIN, round(blue_level*alpha_coef));
-  if (pump_state)
-  {
-    analogWrite(PUMP_PIN, round(255*alpha_coef));
-  }
+void changeColor(byte *red, byte *green, byte *blue, byte *alpha) {
+    log("changeColor");
+    if (alpha != nullptr) {
+        alpha_level = *alpha;
+        // alpha coefficient
+        alpha_coef = alpha_level/255.0;
+    }
+    red_level = round(*red*alpha_coef);
+    green_level = round(*green*alpha_coef);
+    blue_level = round(*blue*alpha_coef);
 }
 
 void changeColor(byte message[]) {
-  changeColor(message[0], message[1], message[2], message[3]);
+    byte *alpha = message[3] == END_CHAR ? nullptr : &message[3];
+    changeColor(&message[0], &message[1], &message[2], alpha);
 }
 
-void changePowerInterval(byte message[]) 
-{
-}
-
-void changePowerInterval(unsigned long interval) 
-{
-  power_interval_ms = interval;
-  if (power_interval_ms > 0 && !showThread.enabled)
-  {
-    controll.add(&showThread);
-    // controll.add(&showThreadHelper);
-  } else if (power_interval_ms == 0 && showThread.enabled)
-  {
-    controll.remove(&showThread);
-    controll.remove(&showThreadHelper);
-  }
-  showThread.setInterval(power_interval_ms);
-}
-
-void enableRandomColor()
-{
-  random_color_mode = true;
-}
-
-void disableRandomColor()
-{
-  random_color_mode = false;
-}
-
-void submitColorSequence(byte message[])
-{
-
-}
-
-void lightOn()
-{
-  light_state = true;
-  if (power_interval_ms > 0 )
-  {
-    if (!showThread.enabled)
-    {
-      controll.add(&showThread);
+void changePowerInterval(byte message[]) {
+    log("changePowerInterval");
+    power_interval_ms = * (unsigned long *) message;
+    // Serial.println(power_interval_ms);
+    if (power_interval_ms > 0) {
+        if (dimming) thread = &dimmingTriangle;
+        else thread = &intervalSwitch;
+    } else if (power_interval_ms == 0) {
+        thread = nullptr;
     }
-  }
-  analogWrite(RED_PIN, round(red_level*alpha_coef));
-  analogWrite(GREEN_PIN, round(green_level*alpha_coef));
-  analogWrite(BLUE_PIN, round(blue_level*alpha_coef));
-  if (pump_state)
-  {
+}
+
+void enableRandomColor() {
+    random_color_mode = true;
+}
+
+void disableRandomColor() {
+    random_color_mode = false;
+}
+
+void submitColorSequence(byte message[]) {
+    // TODO
+}
+
+void lightOn() {
+    analogWrite(RED_PIN, red_level);
+    analogWrite(GREEN_PIN, green_level);
+    analogWrite(BLUE_PIN, blue_level);
+}
+
+void lightOff() {
+    digitalWrite(RED_PIN, LOW);
+    digitalWrite(GREEN_PIN, LOW);
+    digitalWrite(BLUE_PIN, LOW);
+}
+
+void enableLight() {
+    light_state = true;
+    lightOn();
+}
+
+void disableLight() {
+    light_state = false;
+    lightOff();
+}
+
+void pumpOn() {
     analogWrite(PUMP_PIN, round(255*alpha_coef));
-  }
 }
 
-void lightOff() 
-{
-  light_state = false;
-  if (showThread.enabled)
-  {
-    controll.remove(&showThread);  
-  }
-  digitalWrite(RED_PIN, LOW);
-  digitalWrite(GREEN_PIN, LOW);
-  digitalWrite(BLUE_PIN, LOW);
+void pumpOff() {
+    digitalWrite(PUMP_PIN, LOW);
 }
 
-void pumpOn() 
-{
-  pump_state = true;
-  analogWrite(PUMP_PIN, round(255*alpha_coef));
+void enablePump() {
+    pump_state = true;
+    pumpOn();
 }
 
-void pumpOff()
-{
-  pump_state = false;
-  digitalWrite(PUMP_PIN, LOW);
+void disablePump() {
+    pump_state = false;
+    pumpOff();
+}
+
+// turns everything off
+void turnOff() {
+    digitalWrite(RED_PIN, LOW);
+    digitalWrite(GREEN_PIN, LOW);
+    digitalWrite(BLUE_PIN, LOW);
+    digitalWrite(PUMP_PIN, LOW);
+}
+
+
+void turnOn() {
+
+}
+
+void dimLight(float coeff) {
+    analogWrite(RED_PIN, round(red_level*coeff));
+    analogWrite(GREEN_PIN, round(green_level*coeff));
+    analogWrite(BLUE_PIN, round(blue_level*coeff));
+}
+
+void dimmPump(float coeff) {
+  analogWrite(PUMP_PIN, round(pump_level*coeff));
+}
+
+// threads
+int intervalSwitch() {
+    PT_BEGIN(&intervalPt);
+    if (random_color_mode) {
+        byte red = random_byte();
+        byte green = random_byte();
+        byte blue = random_byte();
+        changeColor(&red, &green, &blue, NULL);
+    } else if (color_seq_mode) {
+        /* code */
+    }
+    lightOn();
+    if (pump_state) pumpOn();
+    PT_SLEEP(&intervalPt, power_interval_ms/2);
+    lightOff();
+    if (pump_state) pumpOff();
+    PT_SLEEP(&intervalPt, power_interval_ms/2);
+    PT_END(&intervalPt);
+}
+
+int dimmingTriangle() {
+    PT_BEGIN(&intervalPt);
+    log("dimmingTriangle");
+    if (random_color_mode) {
+        byte red = random_byte();
+        byte green = random_byte();
+        byte blue = random_byte();
+        changeColor(&red, &green, &blue, nullptr);
+    }
+    // math
+    static unsigned long half_t = power_interval_ms/2;
+    static float coeff = 100.0/half_t;
+    static float dimm_coeff;
+    static size_t i;
+    log("dimming up");
+    for (i = 0; i < power_interval_ms/2; i++) {
+        dimm_coeff = i*coeff;
+        // Serial.println(dimm_coeff);
+        dimLight(dimm_coeff);
+        if (pump_state) dimPump(dimm_coeff);
+        PT_SLEEP(&intervalPt, 1);
+    }
+    log("dimming down");
+    for (i = power_interval_ms/2; i >= 0; i++) {
+        dimm_coeff = i*coeff;
+        dimLight(dimm_coeff);
+        if (pump_state) dimPump(dimm_coeff);
+        PT_SLEEP(&intervalPt, 1);
+    }
+    PT_END(&intervalPt);
+}
+
+/*void runThreads() {
+    for (int i = 0; i < PTS_SIZE; i++) {
+        threads[i]();
+    }  
+}*/
+
+void setup() {
+    PT_INIT(&intervalPt);
+    Serial.begin(9600);
+    // setup pins
+    pinMode(PUMP_PIN, OUTPUT);
+    pinMode(RED_PIN, OUTPUT);
+    pinMode(GREEN_PIN, OUTPUT);
+    pinMode(BLUE_PIN, OUTPUT);
+    randomSeed(analogRead(0));
+    // dimming = true;
+    lightOn();
+    unsigned long interv = 200UL;
+    changePowerInterval((byte*)&interv);
+}
+
+void loop() {
+    btRead();
+    // runThreads();
+    if (thread) {
+        (*thread)();
+    } 
 }
