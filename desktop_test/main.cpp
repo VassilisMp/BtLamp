@@ -173,7 +173,7 @@ void btRead() {
     }
 }
 
-void changeColor(const byte *red, const byte *green, const byte *blue, const byte *alpha) {
+void changeColor(const byte *red, const byte *green, const byte *blue, const byte *alpha = nullptr) {
     log("changeColor");
     if (alpha != nullptr) {
         alpha_level = *alpha;
@@ -287,7 +287,7 @@ int intervalSwitch() {
             byte red = random_byte();
             byte green = random_byte();
             byte blue = random_byte();
-            changeColor(&red, &green, &blue, nullptr);
+            changeColor(&red, &green, &blue);
         } else if (color_seq_mode) {
             /* code */
         }
@@ -303,7 +303,7 @@ int intervalSwitch() {
 
 int dimmingTriangle() {
     static int half_t = power_interval_ms/2;
-    static auto coeff = static_cast<float>(100.0 / half_t);
+    static auto coeff = static_cast<float>(1.0 / half_t);
     static float dimm_coeff;
     static int i;
     PT_BEGIN(&intervalPt);
@@ -312,14 +312,14 @@ int dimmingTriangle() {
         auto red = random_byte();
         auto green = random_byte();
         auto blue = random_byte();
-        changeColor(&red, &green, &blue, nullptr);
+        changeColor(&red, &green, &blue);
     }
     // math
     log("dimming up");
     for (i = 0; i <= power_interval_ms/2; i++) {
         dimm_coeff = i*coeff;
         // Serial.println(dimm_coeff);
-//        printf("%f\n", dimm_coeff);
+        printf("%f\n", dimm_coeff);
         if (light_state) dimLight(dimm_coeff);
         if (pump_state) dimPump(dimm_coeff);
         PT_SLEEP(&intervalPt, 1);
@@ -364,7 +364,7 @@ void setup() {
     pinMode(GREEN_PIN, OUTPUT);
     pinMode(BLUE_PIN, OUTPUT);
     randomSeed(analogRead(0));
-//    enableDimming();
+    enableDimming();
     enableLight();
     int interv = 200;
     changePowerInterval((byte*)&interv);
