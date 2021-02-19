@@ -92,6 +92,9 @@ byte alpha_level = 255;
 float alpha_coef = 1.0;
 //boolean dimming = false;
 boolean random_color_mode = false;
+byte random_color_speed = 1;
+// three speed levels MIN_T, T, T/2
+unsigned long random_color_T() { return random_color_speed == 0 ? MIN_T : random_color_speed == 1 ? T : T/2; }
 boolean color_seq_mode = false;
 boolean light_state = false;
 boolean pump_state = false;
@@ -320,23 +323,25 @@ int periodic_light() {
 //    static auto coeff = M_2PI / T;
     static float dimm_coeff;
     static unsigned long t;
+    static unsigned long last_c_change = 0;
     PT_BEGIN(&intervalPt);
-        if (random_color_mode) {
-            auto red = random_byte();
-            auto green = random_byte();
-            auto blue = random_byte();
-            changeColor(&red, &green, &blue);
-        }
-        // math
+    t = millis();
+    if (random_color_mode && t - last_c_change >= random_color_T()) {
+        auto red = random_byte();
+        auto green = random_byte();
+        auto blue = random_byte();
+        changeColor(&red, &green, &blue);
+        last_c_change = t;
+    }
+    // math
 //    log("dimming");
-        t = millis();
-        // dimm_coeff = abs(sqrt(1-sqrt(1-(t*coeff)))); for circle
-        dimm_coeff = (*periodicFun)(t);
-        // Serial.println(dimm_coeff);
-        printf("%f\n", dimm_coeff);
-        if (light_state) dimLight(dimm_coeff);
-        if (pump_state) dimPump(dimm_coeff);
-        PT_SLEEP(&intervalPt, MIN_T);
+    // dimm_coeff = abs(sqrt(1-sqrt(1-(t*coeff)))); for circle
+    dimm_coeff = (*periodicFun)(t);
+    // Serial.println(dimm_coeff);
+//    printf("%f\n", dimm_coeff);
+    if (light_state) dimLight(dimm_coeff);
+    if (pump_state) dimPump(dimm_coeff);
+    PT_SLEEP(&intervalPt, MIN_T);
     PT_END(&intervalPt);
 }
 
@@ -355,6 +360,7 @@ void setup() {
     pinMode(GREEN_PIN, OUTPUT);
     pinMode(BLUE_PIN, OUTPUT);
     randomSeed(analogRead(0));
+    enableRandomColor();
     enableLight();
     unsigned long interv = 1500;
     changePowerInterval((byte*)&interv);
