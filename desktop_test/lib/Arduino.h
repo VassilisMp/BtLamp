@@ -67,6 +67,10 @@ public:
         printf("%d", n);
     }
 
+    void print(unsigned long n) {
+        printf("%d", n);
+    }
+
     void println(const char* str) {
         printf("%s\n", str);
     }

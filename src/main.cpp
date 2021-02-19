@@ -19,6 +19,37 @@ void log(const char c[]) {
 #endif
 }
 
+// sign function
+#define sgn(x) (x > 0) - (x < 0)
+
+// signal width
+double A = 1.0;
+// period in milliseconds
+unsigned long T = 0;
+// human perception is as fast as 80ms
+#define MIN_T 80UL
+#define MAX_T 30000UL
+#define M_2PI 6.283185307179586232
+// All trigonometric functions listed have period 2π
+//double trigonometric_period = M_2PI;
+
+// limit value between [0, 1]
+#define limit_0_1(x) (x>1 ? 1 : x<0 ? 0 : x)
+// periodic functions
+#define f(t) (M_2PI*t)/T
+float sine_t(double t) { return abs(sin(f(t))); }
+#define enable_sine_t() periodicFun = &sine_t;
+float cos_t(double t) { return abs(cos(f(t))); }
+#define enable_cos_t() periodicFun = &cos_t;
+// #define cas_t(t) (sine_t(t) + cosine_t(t) * 2 // multiply to set max width to 1 // same with sine, just with different frequency
+float tangent_t(double t) { return limit_0_1(tan(f(t))); }
+#define enable_tangent_t() periodicFun = &tangent_t;
+// default
+float square_t(double t) { return limit_0_1(sgn(sin(f(t)))); }
+#define enable_square_t() periodicFun = &square_t;
+float triangle_t(double t) { return abs((2 * A / M_PI) * asin(sin(f(t)))); }
+#define enable_triangle_t() periodicFun = &triangle_t;
+
 #define PUMP_PIN 9
 #define RED_PIN 5
 #define GREEN_PIN 3
@@ -37,14 +68,13 @@ void log(const char c[]) {
 #define DISABLE_LIGHT 'l'
 #define ENABLE_PUMP 'P'
 #define DISABLE_PUMP 'p'
-#define ENABLE_DIMMING 'D'
-#define DISABLE_DIMMING 'd'
+#define ENABLE_SINE '1'
+#define ENABLE_COSINE '2'
+#define ENABLE_TANGENT '3'
+#define ENABLE_SQUARE '4'
+#define ENABLE_TRIANGLE '5'
 
 #define PTS_SIZE 2
-#define MAX_INTERVAL 30000
-// human perception is as fast as 80ms
-#define FUNCTION_STEP 10
-
 // typedef int(*ThreadFPointer)(pt *pt);
 
 // inline static std::vector<pt> pts{2}
@@ -60,8 +90,7 @@ byte green_level = 255;
 byte blue_level = 255;
 byte alpha_level = 255;
 float alpha_coef = 1.0;
-unsigned long power_interval_ms = 0;
-boolean dimming = false;
+//boolean dimming = false;
 boolean random_color_mode = false;
 boolean color_seq_mode = false;
 boolean light_state = false;
@@ -72,8 +101,10 @@ byte index = 0;
 byte end_index = 0;
 
 typedef int (*thread_ptr)();
+typedef float (*periodic_fun)(double);
 // thread_ptr threads[PTS_SIZE];
 thread_ptr thread;
+periodic_fun periodicFun = &square_t;
 
 // light functions
 /*
@@ -112,21 +143,7 @@ inline void enablePump() __attribute__((always_inline));
 inline void disablePump() __attribute__((always_inline));
 // dimm pump
 void dimPump(float coeff);
-
-
-// dim modes
-// enable linearDimming
-inline void enableTriangleDimming() __attribute__((always_inline));
-// enable sinDimming
-inline void enableSinDimming() __attribute__((always_inline));
-// disable dimming
-inline void disableDimming() __attribute__((always_inline));
-
-int intervalSwitch();
-int linearDimming();
-int sinDimming();
-
-
+int periodic_light();
 
 //inline void runThreads() __attribute__((always_inline));
 
@@ -154,12 +171,6 @@ void btRead() {
                 case DISABLE_RANDOM_COLOR:
                     disableRandomColor();
                     break;
-                case ENABLE_DIMMING:
-                    enableDimming();
-                    break;
-                case DISABLE_DIMMING:
-                    disableDimming();
-                    break;
                 case SUBMIT_COLOR_SEQUENCE:
                     submitColorSequence(buffer + 1);
                     break;
@@ -174,6 +185,21 @@ void btRead() {
                     break;
                 case DISABLE_PUMP:
                     disablePump();
+                    break;
+                case ENABLE_SINE:
+                    enable_sine_t();
+                    break;
+                case ENABLE_COSINE:
+                    enable_cos_t();
+                    break;
+                case ENABLE_TANGENT:
+                    enable_tangent_t();
+                    break;
+                case ENABLE_SQUARE:
+                    enable_square_t();
+                    break;
+                case ENABLE_TRIANGLE:
+                    enable_triangle_t();
                     break;
                 default:
                     break;
@@ -203,17 +229,16 @@ void changeColor(byte message[]) {
 }
 
 void changePowerInterval(const byte message[]) {
-    power_interval_ms = * (unsigned long *) message;
+    T = * (unsigned long *) message;
 #ifdef LOGGING
     Serial.print("changePowerInterval: ");
-    Serial.print(power_interval_ms);
+    Serial.print(T);
     Serial.println(" ms");
 #endif
     // Serial.println(power_interval_ms);
-    if (power_interval_ms > 0 && !thread) {
-        if (dimming) thread = &linearDimming;
-        else thread = &intervalSwitch;
-    } else if (power_interval_ms == 0) {
+    if (T > 0 && !thread) {
+        thread = &periodic_light;
+    } else if (T == 0) {
         thread = nullptr;
     }
 }
@@ -291,97 +316,28 @@ void dimPump(float coeff) {
 }
 
 // threads
-int intervalSwitch() {
+int periodic_light() {
+//    static auto coeff = M_2PI / T;
+    static float dimm_coeff;
+    static unsigned long t;
     PT_BEGIN(&intervalPt);
-    log("intervalSwitch");
-    for(;;) {
         if (random_color_mode) {
-            byte red = random_byte();
-            byte green = random_byte();
-            byte blue = random_byte();
+            auto red = random_byte();
+            auto green = random_byte();
+            auto blue = random_byte();
             changeColor(&red, &green, &blue);
-        } else if (color_seq_mode) {
-            /* code */
         }
-        if (light_state) lightOn();
-        if (pump_state) pumpOn();
-        PT_SLEEP(&intervalPt, power_interval_ms/2);
-        if (light_state) lightOff();
-        if (pump_state) pumpOff();
-        PT_SLEEP(&intervalPt, power_interval_ms/2);
-    }
-    PT_END(&intervalPt);
-}
-
-int linearDimming() {
-    static int half_t = power_interval_ms/2;
-    static auto coeff = static_cast<float>(1.0 / half_t);
-    static float dimm_coeff;
-    static int i;
-    PT_BEGIN(&intervalPt);
-    log("linearDimming");
-    if (random_color_mode) {
-        auto red = random_byte();
-        auto green = random_byte();
-        auto blue = random_byte();
-        changeColor(&red, &green, &blue);
-    }
-    // math
-    log("dimming up");
-    for (i = 0; i <= power_interval_ms/2; i++) {
-        dimm_coeff = i*coeff;
+        // math
+//    log("dimming");
+        t = millis();
+        // dimm_coeff = abs(sqrt(1-sqrt(1-(t*coeff)))); for circle
+        dimm_coeff = (*periodicFun)(t);
         // Serial.println(dimm_coeff);
-//        printf("%f\n", dimm_coeff);
+        printf("%f\n", dimm_coeff);
         if (light_state) dimLight(dimm_coeff);
         if (pump_state) dimPump(dimm_coeff);
-        PT_SLEEP(&intervalPt, 1);
-    }
-    log("dimming down");
-    for (i = power_interval_ms/2; i >= 0; i--) {
-        dimm_coeff = i*coeff;
-//        printf("%f\n", dimm_coeff);
-        if (light_state) dimLight(dimm_coeff);
-        if (pump_state) dimPump(dimm_coeff);
-        PT_SLEEP(&intervalPt, 1);
-    }
+        PT_SLEEP(&intervalPt, MIN_T);
     PT_END(&intervalPt);
-}
-
-int sinDimming() {
-    static auto coeff = PI / power_interval_ms;
-    static float dimm_coeff;
-    static int i;
-    PT_BEGIN(&intervalPt);
-    log("sinDimming");
-    if (random_color_mode) {
-        auto red = random_byte();
-        auto green = random_byte();
-        auto blue = random_byte();
-        changeColor(&red, &green, &blue);
-    }
-    // math
-    log("dimming");
-    for (i = 0; i <= power_interval_ms; i++) {
-        // dimm_coeff = abs(sqrt(1-sqrt(1-(i*coeff)))); for circle
-        dimm_coeff = abs(sin(i*coeff));
-        // Serial.println(dimm_coeff);
-//        printf("%f\n", dimm_coeff);
-        if (light_state) dimLight(dimm_coeff);
-        if (pump_state) dimPump(dimm_coeff);
-        PT_SLEEP(&intervalPt, 1);
-    }
-    PT_END(&intervalPt);
-}
-
-void disableDimming() {
-    log("disableDimming");
-    dimming = false;
-    if (thread) thread = &intervalSwitch;
-}
-
-void enableSinDimming() {
-    log("enableSinDimming");
-    thread = &sinDimming;
 }
 
 /*void runThreads() {
@@ -399,9 +355,8 @@ void setup() {
     pinMode(GREEN_PIN, OUTPUT);
     pinMode(BLUE_PIN, OUTPUT);
     randomSeed(analogRead(0));
-    enableSinDimming();
     enableLight();
-    int interv = 1500;
+    unsigned long interv = 1500;
     changePowerInterval((byte*)&interv);
 }
 
