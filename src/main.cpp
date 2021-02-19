@@ -6,6 +6,7 @@
 // #include <time.h>
 // #include <Thread.h>
 // #include <ThreadController.h>
+#include <math.h>
 
 #define random_byte() (byte)(random(256))
 
@@ -41,6 +42,8 @@ void log(const char c[]) {
 
 #define PTS_SIZE 2
 #define MAX_INTERVAL 30000
+// human perception is as fast as 80ms
+#define FUNCTION_STEP 10
 
 // typedef int(*ThreadFPointer)(pt *pt);
 
@@ -57,7 +60,7 @@ byte green_level = 255;
 byte blue_level = 255;
 byte alpha_level = 255;
 float alpha_coef = 1.0;
-int power_interval_ms = 0;
+unsigned long power_interval_ms = 0;
 boolean dimming = false;
 boolean random_color_mode = false;
 boolean color_seq_mode = false;
@@ -109,13 +112,21 @@ inline void enablePump() __attribute__((always_inline));
 inline void disablePump() __attribute__((always_inline));
 // dimm pump
 void dimPump(float coeff);
-// enable dimming
-inline void enableDimming() __attribute__((always_inline));
+
+
+// dim modes
+// enable linearDimming
+inline void enableTriangleDimming() __attribute__((always_inline));
+// enable sinDimming
+inline void enableSinDimming() __attribute__((always_inline));
 // disable dimming
 inline void disableDimming() __attribute__((always_inline));
 
 int intervalSwitch();
-int dimmingTriangle();
+int linearDimming();
+int sinDimming();
+
+
 
 //inline void runThreads() __attribute__((always_inline));
 
@@ -192,15 +203,15 @@ void changeColor(byte message[]) {
 }
 
 void changePowerInterval(const byte message[]) {
-    power_interval_ms = * (int *) message;
+    power_interval_ms = * (unsigned long *) message;
 #ifdef LOGGING
     Serial.print("changePowerInterval: ");
     Serial.print(power_interval_ms);
     Serial.println(" ms");
 #endif
     // Serial.println(power_interval_ms);
-    if (power_interval_ms > 0) {
-        if (dimming) thread = &dimmingTriangle;
+    if (power_interval_ms > 0 && !thread) {
+        if (dimming) thread = &linearDimming;
         else thread = &intervalSwitch;
     } else if (power_interval_ms == 0) {
         thread = nullptr;
@@ -302,13 +313,13 @@ int intervalSwitch() {
     PT_END(&intervalPt);
 }
 
-int dimmingTriangle() {
+int linearDimming() {
     static int half_t = power_interval_ms/2;
     static auto coeff = static_cast<float>(1.0 / half_t);
     static float dimm_coeff;
     static int i;
     PT_BEGIN(&intervalPt);
-    log("dimmingTriangle");
+    log("linearDimming");
     if (random_color_mode) {
         auto red = random_byte();
         auto green = random_byte();
@@ -336,18 +347,41 @@ int dimmingTriangle() {
     PT_END(&intervalPt);
 }
 
-void enableDimming() {
-    log("enableDimming");
-    dimming = true;
-    if (thread == &intervalSwitch)
-        thread = &dimmingTriangle;
+int sinDimming() {
+    static auto coeff = PI / power_interval_ms;
+    static float dimm_coeff;
+    static int i;
+    PT_BEGIN(&intervalPt);
+    log("sinDimming");
+    if (random_color_mode) {
+        auto red = random_byte();
+        auto green = random_byte();
+        auto blue = random_byte();
+        changeColor(&red, &green, &blue);
+    }
+    // math
+    log("dimming");
+    for (i = 0; i <= power_interval_ms; i++) {
+        // dimm_coeff = abs(sqrt(1-sqrt(1-(i*coeff)))); for circle
+        dimm_coeff = abs(sin(i*coeff));
+        // Serial.println(dimm_coeff);
+//        printf("%f\n", dimm_coeff);
+        if (light_state) dimLight(dimm_coeff);
+        if (pump_state) dimPump(dimm_coeff);
+        PT_SLEEP(&intervalPt, 1);
+    }
+    PT_END(&intervalPt);
 }
 
 void disableDimming() {
     log("disableDimming");
     dimming = false;
-    if (thread == &dimmingTriangle)
-        thread = &intervalSwitch;
+    if (thread) thread = &intervalSwitch;
+}
+
+void enableSinDimming() {
+    log("enableSinDimming");
+    thread = &sinDimming;
 }
 
 /*void runThreads() {
@@ -365,9 +399,9 @@ void setup() {
     pinMode(GREEN_PIN, OUTPUT);
     pinMode(BLUE_PIN, OUTPUT);
     randomSeed(analogRead(0));
-    enableDimming();
+    enableSinDimming();
     enableLight();
-    int interv = 200;
+    int interv = 1500;
     changePowerInterval((byte*)&interv);
 }
 
