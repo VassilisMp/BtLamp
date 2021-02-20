@@ -7,6 +7,7 @@
 // #include <Thread.h>
 // #include <ThreadController.h>
 #include <math.h>
+#include <SoftwareSerial.h>
 
 #define random_byte() (byte)(random(256))
 
@@ -54,10 +55,11 @@ float triangle_t(double t) { return abs((2 * A / M_PI) * asin(sin(f(t)))); }
 #define RED_PIN 5
 #define GREEN_PIN 3
 #define BLUE_PIN 6
-#define RX_PIN 0
-#define TX_PIN 1
+#define RX_PIN 12
+#define TX_PIN 13
 #define END_CHAR '\n'
 
+SoftwareSerial MyBlue(RX_PIN, TX_PIN); // RX | TX
 // Bluetooth codes
 #define CHANGE_COLOR 'c'
 #define CHANGE_POWER_INTERVAL 'i'
@@ -156,8 +158,8 @@ int periodic_light();
 void btRead() {
     // https://www.arduino.cc/reference/en/language/functions/communication/serial/readbytes/
     // Serial.readBytes(buffer, length)
-    if(Serial.available() > 0) {
-        buffer[index] = Serial.read();
+    if(MyBlue.available() > 0) {
+        buffer[index] = MyBlue.read();
         // if reached end character, execute cases by message
         if (buffer[index] == END_CHAR) {
             /* do stuff with message */
@@ -356,6 +358,7 @@ int periodic_light() {
 void setup() {
     PT_INIT(&intervalPt);
     Serial.begin(9600);
+    MyBlue.begin(9600);
     // setup pins
     pinMode(PUMP_PIN, OUTPUT);
     pinMode(RED_PIN, OUTPUT);
