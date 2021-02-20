@@ -151,6 +151,7 @@ int periodic_light();
 //inline void runThreads() __attribute__((always_inline));
 
 
+// TODO write bluetooth setup code, SoftwareSerial...
 // reads from bluetooth serial
 void btRead() {
     // https://www.arduino.cc/reference/en/language/functions/communication/serial/readbytes/
@@ -170,6 +171,7 @@ void btRead() {
                     break;
                 case ENABLE_RANDOM_COLOR:
                     enableRandomColor();
+                    random_color_speed = buffer[1];
                     break;
                 case DISABLE_RANDOM_COLOR:
                     disableRandomColor();
@@ -327,10 +329,10 @@ int periodic_light() {
     PT_BEGIN(&intervalPt);
     t = millis();
     if (random_color_mode && t - last_c_change >= random_color_T()) {
-        auto red = random_byte();
-        auto green = random_byte();
-        auto blue = random_byte();
-        changeColor(&red, &green, &blue);
+        red_level = random_byte() * alpha_coef;
+        green_level = random_byte() * alpha_coef;
+        blue_level = random_byte() * alpha_coef;
+//        changeColor(&red, &green, &blue);
         last_c_change = t;
     }
     // math
