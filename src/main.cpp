@@ -122,8 +122,10 @@ unsigned long random_color_T() { return random_color_speed == 0 ? MIN_T : random
 boolean light_state = false;
 boolean pump_state = false;
 // read buffer
-byte buffer[100];
-byte index = 0;
+#define BUFFER_SIZE 100
+byte buffer[BUFFER_SIZE];
+//byte index = 0;
+size_t bytesRead = 0;
 //byte end_index = 0;
 byte color_seq_array[100];
 byte color_seq_multitude;
@@ -185,6 +187,41 @@ void dimPump(float coeff);
 int periodic_light();
 //int color_sequence();
 
+// convert components of a color int
+byte alpha(unsigned long color) {
+    // unsigned right shift operation
+    return color >> 24;
+}
+byte red(unsigned long color) {
+    return (color >> 16) & 0xFF;
+}
+byte green(unsigned long color) {
+    return (color >> 8) & 0xFF;
+}
+byte blue(unsigned long color) {
+    return color & 0xFF;
+}
+// packing an array of 4 bytes to an long, big endian else little endian, clean code
+long toLong(const byte d[], boolean bigEndian) {
+    long value; 
+    if (bigEndian) {
+        value  =  (long)d[0] << 24;
+        value += (long)d[1] << 16;
+        value += (long)d[2] << 8;
+        value += (long)d[3];
+    } else {
+        /*return ((bytes[3] & 0xFF) << 24) | 
+            ((bytes[2] & 0xFF) << 16) | 
+            ((bytes[1] & 0xFF) << 8 ) | 
+            ((bytes[0] & 0xFF) << 0 );*/
+        value  =  (long)d[3] << 24;
+        value += (long)d[2] << 16;
+        value += (long)d[1] << 8;
+        value += (long)d[0];
+    }
+    return value;
+}
+
 //inline void runThreads() __attribute__((always_inline));
 
 
@@ -194,64 +231,60 @@ void btRead() {
     // https://www.arduino.cc/reference/en/language/functions/communication/serial/readbytes/
     // Serial.readBytes(buffer, length)
     if(MyBlue.available() > 0) {
-        buffer[index] = MyBlue.read();
+        //buffer[index] = MyBlue.read();
         // if reached end character, execute cases by message
-        if (buffer[index] == END_CHAR) {
-            /* do stuff with message */
-            switch (buffer[0]) {
-                case CHANGE_COLOR:
-                    if (random_color_mode) disableRandomColor();
-                    changeColor(buffer + 1);
-                    break;
-                case CHANGE_POWER_INTERVAL:
-                    changePowerInterval(buffer + 1);
-                    break;
-                case ENABLE_RANDOM_COLOR:
-                    enableRandomColor();
-                    random_color_speed = buffer[1];
-                    break;
-                case DISABLE_RANDOM_COLOR:
-                    disableRandomColor();
-                    break;
-                case SUBMIT_COLOR_SEQUENCE:
-                    submitColorSequence(buffer + 1);
-                    break;
-                case REMOVE_COLOR_SEQUENCE:
-                    removeColorSequence();
-                    break;
-                case ENABLE_LIGHT:
-                    enableLight();
-                    break;
-                case DISABLE_LIGHT:
-                    disableLight();
-                    break;
-                case ENABLE_PUMP:
-                    enablePump();
-                    break;
-                case DISABLE_PUMP:
-                    disablePump();
-                    break;
-                case ENABLE_SINE:
-                    enable_sine_t();
-                    break;
-                case ENABLE_COSINE:
-                    enable_cos_t();
-                    break;
-                case ENABLE_TANGENT:
-                    enable_tangent_t();
-                    break;
-                case ENABLE_SQUARE:
-                    enable_square_t();
-                    break;
-                case ENABLE_TRIANGLE:
-                    enable_triangle_t();
-                    break;
-                default:
-                    break;
-            }
-            index = 0;
-        } else {
-            index++;
+        bytesRead = MyBlue.readBytesUntil(END_CHAR, buffer, BUFFER_SIZE);
+        /* do stuff with message */
+        switch (buffer[0]) {
+            case CHANGE_COLOR:
+                if (random_color_mode) disableRandomColor();
+                changeColor(buffer + 1);
+                break;
+            case CHANGE_POWER_INTERVAL:
+                changePowerInterval(buffer + 1);
+                break;
+            case ENABLE_RANDOM_COLOR:
+                enableRandomColor();
+                random_color_speed = buffer[1];
+                break;
+            case DISABLE_RANDOM_COLOR:
+                disableRandomColor();
+                break;
+            case SUBMIT_COLOR_SEQUENCE:
+                submitColorSequence(buffer + 1);
+                break;
+            case REMOVE_COLOR_SEQUENCE:
+                removeColorSequence();
+                break;
+            case ENABLE_LIGHT:
+                enableLight();
+                break;
+            case DISABLE_LIGHT:
+                disableLight();
+                break;
+            case ENABLE_PUMP:
+                enablePump();
+                break;
+            case DISABLE_PUMP:
+                disablePump();
+                break;
+            case ENABLE_SINE:
+                enable_sine_t();
+                break;
+            case ENABLE_COSINE:
+                enable_cos_t();
+                break;
+            case ENABLE_TANGENT:
+                enable_tangent_t();
+                break;
+            case ENABLE_SQUARE:
+                enable_square_t();
+                break;
+            case ENABLE_TRIANGLE:
+                enable_triangle_t();
+                break;
+            default:
+                break;
         }
     }
 }
@@ -276,8 +309,14 @@ void changeColor(byte message[]) {
 }
 
 void changePowerInterval(const byte message[]) {
-    T = * (unsigned long *) message;
+    // T = * (unsigned long *) message;
+    T = toLong(message, true);
     #ifdef LOGGING
+    //    int size = sizeof message / sizeof message[0];
+        Serial.print("byte array size: ");
+        Serial.println(bytesRead-1);
+    //    Serial.println(size);
+    //    Serial.println((char*)message);
         Serial.print("changePowerInterval: ");
         Serial.print(T);
         Serial.println(" ms");
@@ -304,13 +343,13 @@ void submitColorSequence(byte message[]) {
     log("submitColorSequence");
     // use index-1 because is on the newline(last) char
     // count quadraples of (r,g,b,a)
-    color_seq_multitude = (index-1)/4;
-    byte colorSeq[index-1];
-    copyArray(message, color_seq_array, index-1);
+    color_seq_multitude = (bytesRead-1)/4;
+    byte colorSeq[bytesRead-1];
+    copyArray(message, color_seq_array, bytesRead-1);
     #ifdef LOGGING
         Serial.print('['); 
         char s[5];
-        for (int i = 0; i < index-1; i+=4) {
+        for (int i = 0; i < bytesRead-1; i+=4) {
             sprintf(s, "{%3d, %3d, %3d, %3d}, ", color_seq_array[i], color_seq_array[i+1], color_seq_array[i+2], color_seq_array[i+3]);
             Serial.print(s); 
         }
@@ -450,7 +489,7 @@ void setup() {
     randomSeed(analogRead(0));
     enableRandomColor();
     enableLight();
-    unsigned long interv = 1500;
+    unsigned long interv = 0;
     changePowerInterval((byte*)&interv);
 }
 
