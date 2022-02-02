@@ -20,6 +20,17 @@ void log(const char c[]) {
 #endif
 }
 
+void log(const byte *red, const byte *green, const byte *blue, const byte *alpha, const char message[] = nullptr, const char *prefix = nullptr, const char *suffix = nullptr) {
+#ifdef LOGGING
+    if (message) Serial.print(message);
+    if (prefix) Serial.print(*prefix);
+    char s[35];
+    sprintf(s, " {%3d, %3d, %3d, %3d}", *red, *green, *blue, *alpha);
+    log(s);
+    if (suffix) Serial.print(*suffix);
+#endif
+}
+
 // sign function
 #define sgn(x) (x > 0) - (x < 0)
 
@@ -66,6 +77,7 @@ SoftwareSerial MyBlue(RX_PIN, TX_PIN); // RX | TX
 #define ENABLE_RANDOM_COLOR 'R'
 #define DISABLE_RANDOM_COLOR 'r'
 #define SUBMIT_COLOR_SEQUENCE 's'
+#define REMOVE_COLOR_SEQUENCE 'S'
 #define ENABLE_LIGHT 'L'
 #define DISABLE_LIGHT 'l'
 #define ENABLE_PUMP 'P'
@@ -76,13 +88,22 @@ SoftwareSerial MyBlue(RX_PIN, TX_PIN); // RX | TX
 #define ENABLE_SQUARE '4'
 #define ENABLE_TRIANGLE '5'
 
-#define PTS_SIZE 2
+//#define PTS_SIZE 2
 // typedef int(*ThreadFPointer)(pt *pt);
 
 // inline static std::vector<pt> pts{2}
 // pt pts[PTS_SIZE];
 // int (*ptsFuns[PTS_SIZE])(pt *pt);
 // ThreadFPointer ptFuns[PTS_SIZE];
+
+// function to copy an array
+void copyArray(byte *arr, byte *copy, int size)
+{
+	// loop to iterate through array
+	for (int i = 0; i < size; ++i) {
+		copy[i] = arr[i];
+	}
+}
 
 pt intervalPt;
 
@@ -97,18 +118,30 @@ boolean random_color_mode = false;
 byte random_color_speed = 1;
 // three speed levels MIN_T, T, T/2
 unsigned long random_color_T() { return random_color_speed == 0 ? MIN_T : random_color_speed == 1 ? T : T/2; }
-boolean color_seq_mode = false;
+//boolean color_seq_mode = false;
 boolean light_state = false;
 boolean pump_state = false;
 // read buffer
 byte buffer[100];
 byte index = 0;
-byte end_index = 0;
+//byte end_index = 0;
+byte color_seq_array[100];
+byte color_seq_multitude;
 
 typedef int (*thread_ptr)();
 typedef float (*periodic_fun)(double);
+// TODO future use
+/*
+typedef struct Color {
+   byte red;
+   byte green;
+   byte blue;
+   byte alpha;
+} Color;
+*/
 // thread_ptr threads[PTS_SIZE];
 thread_ptr thread;
+//thread_ptr color_seq_thread = nullptr;
 periodic_fun periodicFun = &square_t;
 
 // light functions
@@ -136,6 +169,7 @@ inline void changeColor(byte message[]) __attribute__((always_inline));
 inline void changeColor(const byte *red, const byte *green, const byte *blue, const byte *alpha) __attribute__((always_inline));
 void changePowerInterval(const byte[]);
 void submitColorSequence(byte[]);
+void removeColorSequence();
 void dimLight(float coeff);
 // pump functions
 // turns on the pump according to the alpha coefficient
@@ -149,6 +183,7 @@ inline void disablePump() __attribute__((always_inline));
 // dimm pump
 void dimPump(float coeff);
 int periodic_light();
+//int color_sequence();
 
 //inline void runThreads() __attribute__((always_inline));
 
@@ -165,7 +200,7 @@ void btRead() {
             /* do stuff with message */
             switch (buffer[0]) {
                 case CHANGE_COLOR:
-                    disableRandomColor();
+                    if (random_color_mode) disableRandomColor();
                     changeColor(buffer + 1);
                     break;
                 case CHANGE_POWER_INTERVAL:
@@ -180,6 +215,9 @@ void btRead() {
                     break;
                 case SUBMIT_COLOR_SEQUENCE:
                     submitColorSequence(buffer + 1);
+                    break;
+                case REMOVE_COLOR_SEQUENCE:
+                    removeColorSequence();
                     break;
                 case ENABLE_LIGHT:
                     enableLight();
@@ -219,8 +257,8 @@ void btRead() {
 }
 
 void changeColor(const byte *red, const byte *green, const byte *blue, const byte *alpha = nullptr) {
-    log("changeColor");
-    if (alpha != nullptr) {
+    log(red, green, blue, alpha, "changeColor");
+    if (alpha) {
         alpha_level = *alpha;
         // alpha coefficient
         alpha_coef = alpha_level/255.0;
@@ -228,6 +266,8 @@ void changeColor(const byte *red, const byte *green, const byte *blue, const byt
     red_level = round(*red*alpha_coef);
     green_level = round(*green*alpha_coef);
     blue_level = round(*blue*alpha_coef);
+    if (!thread && light_state)
+        lightOn();  
 }
 
 void changeColor(byte message[]) {
@@ -237,11 +277,11 @@ void changeColor(byte message[]) {
 
 void changePowerInterval(const byte message[]) {
     T = * (unsigned long *) message;
-#ifdef LOGGING
-    Serial.print("changePowerInterval: ");
-    Serial.print(T);
-    Serial.println(" ms");
-#endif
+    #ifdef LOGGING
+        Serial.print("changePowerInterval: ");
+        Serial.print(T);
+        Serial.println(" ms");
+    #endif
     // Serial.println(power_interval_ms);
     if (T > 0 && !thread) {
         thread = &periodic_light;
@@ -261,7 +301,34 @@ void disableRandomColor() {
 }
 
 void submitColorSequence(byte message[]) {
-    // TODO
+    log("submitColorSequence");
+    // use index-1 because is on the newline(last) char
+    // count quadraples of (r,g,b,a)
+    color_seq_multitude = (index-1)/4;
+    byte colorSeq[index-1];
+    copyArray(message, color_seq_array, index-1);
+    #ifdef LOGGING
+        Serial.print('['); 
+        char s[5];
+        for (int i = 0; i < index-1; i+=4) {
+            sprintf(s, "{%3d, %3d, %3d, %3d}, ", color_seq_array[i], color_seq_array[i+1], color_seq_array[i+2], color_seq_array[i+3]);
+            Serial.print(s); 
+        }
+        Serial.print("] ");
+        Serial.print(", multitude ");
+        Serial.print(int(color_seq_multitude)); 
+        Serial.println();
+    #endif
+    // deactivate random color if enabled, to use color sequence
+    if (random_color_mode) {
+        random_color_mode = false;
+        // TODO must send update to android if deactivated
+    }
+}
+
+void removeColorSequence() {
+    log("removeColorSequence");
+    color_seq_multitude = 0;
 }
 
 void lightOn() {
@@ -328,6 +395,7 @@ int periodic_light() {
     static float dimm_coeff;
     static unsigned long t;
     static unsigned long last_c_change = 0;
+    static int seq_index = 0;
     PT_BEGIN(&intervalPt);
     t = millis();
     if (random_color_mode && t - last_c_change >= random_color_T()) {
@@ -337,6 +405,21 @@ int periodic_light() {
 //        changeColor(&red, &green, &blue);
         last_c_change = t;
     }
+    // if color sequence array is not null, change color
+    if (color_seq_multitude>0 && t - last_c_change >= random_color_T()) {
+        // each color is a qudraple, (r, g, b, alpha)
+        // I don 't use alpha, so I can change color without dimming 
+        red_level = color_seq_array[seq_index]; //* alpha_coef;
+        green_level = color_seq_array[seq_index+1]; //* alpha_coef;
+        blue_level = color_seq_array[seq_index+2]; //* alpha_coef;
+        log(&red_level, &green_level, &blue_level, &alpha_level);
+        // add 4 to go to the next color
+        seq_index += 4;
+        if (seq_index/color_seq_multitude == 4) seq_index = 0; 
+//        changeColor(&red, &green, &blue);
+        last_c_change = t;
+    }
+    
     // math
 //    log("dimming");
     // dimm_coeff = abs(sqrt(1-sqrt(1-(t*coeff)))); for circle
@@ -373,8 +456,7 @@ void setup() {
 
 void loop() {
     btRead();
-    // runThreads();
-    if (thread) {
-        (*thread)();
-    }
+    //runThreads();
+    if (thread) (*thread)();
+    //if (color_seq_thread) (*color_seq_thread)();
 }
